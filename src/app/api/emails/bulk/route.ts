@@ -2,16 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { verifyApiKey } from "@/lib/api-keys";
 import { getDomainById } from "@/lib/domains";
-import { query } from "@/lib/database";
-import { sendEmailsSync } from "@/lib/batch-processor";
+import { transaction } from "@/lib/database";
+import { processBatch } from "@/lib/batch-processor";
 
-// Genuinely matches Resend's real /emails/batch contract (checked against
-// resend.com/docs/api-reference/emails/send-batch-emails directly): the
-// request body is a raw array (not wrapped in an object), capped at 100,
-// processed synchronously, response is { data: [{ id }, ...] }. For large
-// async sends (the thing Resend's own API has no answer for), see
-// POST /api/emails/bulk instead — a deliberately different, non-Resend
-// endpoint, not a variant of this one.
+// Not part of Resend's real API — Resend's own /emails/batch is synchronous
+// and capped at 100 (see /api/emails/batch in this app for that genuinely
+// compatible endpoint). This one exists because Resend has no answer for
+// "send to 10,000 recipients" — a single HTTP request can't stay open that
+// long. Async: returns a bulkId immediately, processes in the background,
+// poll GET /api/emails/bulk/:id for status. Still stored in the `batches`
+// table internally (unchanged name, this is just the route surface).
 
 const bufferObject = z.object({
   type: z.literal("Buffer"),
@@ -33,7 +33,7 @@ const attachmentSchema = z.object({
 const toArrayOrString = (val: unknown) =>
   typeof val === "string" ? [val] : val;
 
-const batchEmailSchema = z
+const bulkEmailSchema = z
   .object({
     from: z.string().min(1, "From is required"),
     to: z.preprocess(
@@ -46,16 +46,13 @@ const batchEmailSchema = z
     html: z.string().optional(),
     text: z.string().optional(),
     attachments: z.array(attachmentSchema).optional(),
-    reply_to: z.preprocess(toArrayOrString, z.array(z.string())).optional(),
-    tags: z.record(z.string(), z.string()).optional(),
   })
   .refine((data) => data.html || data.text, {
     message: "Either html or text content is required",
   });
 
-// Raw array, not { emails: [...] } — matches Resend's real request shape.
-const batchRequestSchema = z.array(batchEmailSchema).min(1).max(100, {
-  message: "A maximum of 100 emails can be sent per batch request",
+const bulkRequestSchema = z.object({
+  emails: z.array(bulkEmailSchema).min(1).max(1000),
 });
 
 function cors(response: NextResponse) {
@@ -105,7 +102,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const emails = batchRequestSchema.parse(body);
+    const { emails } = bulkRequestSchema.parse(body);
 
     const domain = await getDomainById(apiKey.domain_id);
     if (!domain) {
@@ -137,69 +134,28 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(
-      `[/api/emails/batch] Sending batch of ${emails.length} emails for domain=${domain.domain}`
+      `[/api/emails/bulk] Queuing bulk send of ${emails.length} emails for domain=${domain.domain}`
     );
 
-    const results = await sendEmailsSync(
-      emails.map((email) => {
-        const toArray = Array.isArray(email.to) ? email.to : [email.to];
-        const ccArray = email.cc
-          ? Array.isArray(email.cc)
-            ? email.cc
-            : [email.cc]
-          : undefined;
-        const bccArray = email.bcc
-          ? Array.isArray(email.bcc)
-            ? email.bcc
-            : [email.bcc]
-          : undefined;
-        const replyToArray = email.reply_to
-          ? Array.isArray(email.reply_to)
-            ? email.reply_to
-            : [email.reply_to]
-          : undefined;
+    const bulkId = await transaction(async (client) => {
+      const batchResult = await client.query(
+        `INSERT INTO batches (api_key_id, domain_id, total_count, status)
+         VALUES ($1, $2, $3, 'pending')
+         RETURNING id`,
+        [apiKey.id, domain.id, emails.length]
+      );
+      const id = batchResult.rows[0].id;
 
-        // Same contentType inference as the single-send route — schema
-        // leaves it optional, EmailAttachment requires it.
-        const attachments = email.attachments?.map((att) => {
-          let contentType = att.contentType;
-          if (!contentType) {
-            if (att.filename.endsWith(".ics")) contentType = "text/calendar; method=REQUEST";
-            else if (att.filename.endsWith(".pdf")) contentType = "application/pdf";
-            else contentType = "application/octet-stream";
-          }
-          return { filename: att.filename, content: att.content, contentType };
-        });
-
-        return {
-          from: email.from,
-          to: toArray,
-          cc: ccArray,
-          bcc: bccArray,
-          subject: email.subject,
-          html: email.html,
-          text: email.text,
-          attachments,
-          replyTo: replyToArray,
-          tags: email.tags,
-        };
-      })
-    );
-
-    // Log each send — same email_logs table as the single-send route, no
-    // batch_id (that's specific to the async /emails/bulk path).
-    for (let i = 0; i < emails.length; i++) {
-      const email = emails[i];
-      const result = results[i];
-      try {
-        await query(
+      for (const email of emails) {
+        await client.query(
           `INSERT INTO email_logs (
-            api_key_id, domain_id, from_email, to_emails, cc_emails, bcc_emails,
-            subject, html_content, text_content, attachments, status, ses_message_id, error_message
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+            api_key_id, domain_id, batch_id, from_email, to_emails, cc_emails, bcc_emails,
+            subject, html_content, text_content, attachments, status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending')`,
           [
             apiKey.id,
             domain.id,
+            id,
             email.from,
             JSON.stringify(email.to),
             JSON.stringify(email.cc || []),
@@ -208,23 +164,26 @@ export async function POST(request: NextRequest) {
             email.html,
             email.text,
             JSON.stringify(email.attachments || []),
-            "id" in result ? "sent" : "failed",
-            "id" in result ? result.id : null,
-            "error" in result ? result.error : null,
           ]
         );
-      } catch (logError) {
-        console.error("Failed to log batch email:", logError);
       }
-    }
 
-    // Resend's real response shape: { data: [{ id }, ...] }.
+      return id;
+    });
+
+    // Fire and forget — this is a long-running Node process (Docker/standalone,
+    // not serverless), so processing continues after the response is sent.
+    // Errors here are per-item (caught + recorded inside processBatch) or a
+    // total processor crash, which we still don't want to leave silent.
+    processBatch(bulkId).catch((error) => {
+      console.error(`[bulk ${bulkId}] Processing failed:`, error);
+    });
+
     return cors(
-      NextResponse.json({
-        data: results.map((result) =>
-          "id" in result ? { id: result.id } : { error: result.error }
-        ),
-      })
+      NextResponse.json(
+        { bulkId, total: emails.length, status: "pending" },
+        { status: 202 }
+      )
     );
   } catch (error: unknown) {
     const errorObj = error as { errors?: unknown; message?: string };

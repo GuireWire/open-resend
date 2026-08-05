@@ -52,16 +52,16 @@ export async function GET(
     const batch = batchResult.rows[0];
     if (!batch) {
       return cors(
-        NextResponse.json({ error: "Batch not found" }, { status: 404 })
+        NextResponse.json({ error: "Bulk send not found" }, { status: 404 })
       );
     }
 
     // Scope to the requesting API key's own domain — same ownership model
     // as GET /api/emails/:id, just keyed on domain rather than api_key_id
-    // since a batch can be polled by any key belonging to that domain.
+    // since a bulk send can be polled by any key belonging to that domain.
     if (batch.domain_id !== apiKey.domain_id) {
       return cors(
-        NextResponse.json({ error: "Batch not found" }, { status: 404 })
+        NextResponse.json({ error: "Bulk send not found" }, { status: 404 })
       );
     }
 
@@ -73,7 +73,7 @@ export async function GET(
 
     return cors(
       NextResponse.json({
-        batchId: batch.id,
+        bulkId: batch.id,
         status: batch.status,
         total: batch.total_count,
         sent: batch.sent_count,

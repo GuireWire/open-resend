@@ -1,9 +1,52 @@
 import { query } from "@/lib/database";
-import { sendEmail, getSendQuota, type EmailAttachment } from "@/lib/ses";
+import {
+  sendEmail,
+  getSendQuota,
+  type EmailAttachment,
+  type SendEmailOptions,
+} from "@/lib/ses";
 
 // Stay under the account's approved rate rather than right at it — leaves
 // headroom for other sends happening on the same account concurrently.
 const SAFETY_FACTOR = 0.8;
+
+// Used by the genuinely Resend-compatible POST /api/emails/batch (small,
+// ≤100, synchronous — matches Resend's real contract) — not the pacing
+// used by processBatch below, which is for the large async /emails/bulk
+// path. A bounded 100-item burst with modest concurrency is a much smaller
+// reputation risk than pacing thousands of sequential sends would be, and
+// real Resend doesn't rate-limit-throttle within a single batch call either.
+const SYNC_CONCURRENCY = 5;
+
+export async function sendEmailsSync(
+  emails: SendEmailOptions[],
+): Promise<Array<{ id: string } | { error: string }>> {
+  const results: Array<{ id: string } | { error: string }> = new Array(
+    emails.length,
+  );
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < emails.length) {
+      const current = nextIndex++;
+      try {
+        const id = await sendEmail(emails[current]);
+        results[current] = { id };
+      } catch (error) {
+        results[current] = {
+          error: error instanceof Error ? error.message : "Failed to send email",
+        };
+      }
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(SYNC_CONCURRENCY, emails.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+  return results;
+}
 
 interface PendingEmailLogRow {
   id: string;
