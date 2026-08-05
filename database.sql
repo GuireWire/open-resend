@@ -47,11 +47,27 @@ CREATE TABLE IF NOT EXISTS api_keys (
   UNIQUE(user_id, key_name)
 );
 
+-- Batches table — tracks a POST /api/emails/batch request as a group;
+-- individual sends still get their own email_logs row (see batch_id below)
+-- so per-recipient status/tracking stays exactly as granular as a single send.
+CREATE TABLE IF NOT EXISTS batches (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  api_key_id UUID REFERENCES api_keys(id) ON DELETE SET NULL,
+  domain_id UUID REFERENCES domains(id) ON DELETE CASCADE,
+  total_count INTEGER NOT NULL,
+  sent_count INTEGER DEFAULT 0,
+  failed_count INTEGER DEFAULT 0,
+  status VARCHAR(50) DEFAULT 'pending', -- pending, processing, completed
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Email logs table
 CREATE TABLE IF NOT EXISTS email_logs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   api_key_id UUID REFERENCES api_keys(id) ON DELETE SET NULL,
   domain_id UUID REFERENCES domains(id) ON DELETE CASCADE,
+  batch_id UUID REFERENCES batches(id) ON DELETE SET NULL,
   message_id VARCHAR(255),
   from_email VARCHAR(255) NOT NULL,
   to_emails JSONB NOT NULL, -- Array of email addresses
@@ -68,6 +84,22 @@ CREATE TABLE IF NOT EXISTS email_logs (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Migration for existing installs (safe to run multiple times):
+-- CREATE TABLE IF NOT EXISTS batches (
+--   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+--   api_key_id UUID REFERENCES api_keys(id) ON DELETE SET NULL,
+--   domain_id UUID REFERENCES domains(id) ON DELETE CASCADE,
+--   total_count INTEGER NOT NULL,
+--   sent_count INTEGER DEFAULT 0,
+--   failed_count INTEGER DEFAULT 0,
+--   status VARCHAR(50) DEFAULT 'pending',
+--   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+--   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- );
+-- ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS batch_id UUID REFERENCES batches(id) ON DELETE SET NULL;
+-- CREATE TRIGGER update_batches_updated_at BEFORE UPDATE ON batches
+--     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Webhook events table
 CREATE TABLE IF NOT EXISTS webhook_events (
@@ -105,6 +137,9 @@ CREATE INDEX IF NOT EXISTS idx_email_logs_api_key_id ON email_logs(api_key_id);
 CREATE INDEX IF NOT EXISTS idx_email_logs_domain_id ON email_logs(domain_id);
 CREATE INDEX IF NOT EXISTS idx_email_logs_message_id ON email_logs(message_id);
 CREATE INDEX IF NOT EXISTS idx_email_logs_created_at ON email_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_email_logs_batch_id ON email_logs(batch_id);
+CREATE INDEX IF NOT EXISTS idx_batches_api_key_id ON batches(api_key_id);
+CREATE INDEX IF NOT EXISTS idx_batches_domain_id ON batches(domain_id);
 CREATE INDEX IF NOT EXISTS idx_webhook_events_email_log_id ON webhook_events(email_log_id);
 CREATE INDEX IF NOT EXISTS idx_webhook_events_processed ON webhook_events(processed);
 CREATE INDEX IF NOT EXISTS idx_waitlist_signups_email ON waitlist_signups(email);
@@ -130,7 +165,10 @@ CREATE TRIGGER update_domains_updated_at BEFORE UPDATE ON domains
 CREATE TRIGGER update_api_keys_updated_at BEFORE UPDATE ON api_keys 
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_email_logs_updated_at BEFORE UPDATE ON email_logs 
+CREATE TRIGGER update_email_logs_updated_at BEFORE UPDATE ON email_logs
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_batches_updated_at BEFORE UPDATE ON batches
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_waitlist_signups_updated_at BEFORE UPDATE ON waitlist_signups 

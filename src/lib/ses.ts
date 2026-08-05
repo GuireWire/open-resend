@@ -8,6 +8,7 @@ import {
   CreateConfigurationSetCommand,
   VerifyDomainDkimCommand,
   GetIdentityDkimAttributesCommand,
+  GetSendQuotaCommand,
 } from "@aws-sdk/client-ses";
 
 const sesClient = new SESClient({
@@ -294,4 +295,22 @@ export function generateDNSRecords(
   });
 
   return records;
+}
+
+export interface SendQuota {
+  max24HourSend: number;
+  maxSendRate: number;
+  sentLast24Hours: number;
+}
+
+// Used by the batch sender to pace itself against the account's real
+// approved SES rate instead of guessing/hardcoding one.
+export async function getSendQuota(): Promise<SendQuota> {
+  const command = new GetSendQuotaCommand({});
+  const response = await sesClient.send(command);
+  return {
+    max24HourSend: response.Max24HourSend ?? 0,
+    maxSendRate: response.MaxSendRate ?? 1,
+    sentLast24Hours: response.SentLast24Hours ?? 0,
+  };
 }
