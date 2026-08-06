@@ -58,6 +58,7 @@ interface PendingEmailLogRow {
   html_content: string | null;
   text_content: string | null;
   attachments: EmailAttachment[];
+  headers: Record<string, string> | null;
 }
 
 // Processes every still-pending email_logs row for a batch, paced against
@@ -70,7 +71,7 @@ export async function processBatch(batchId: string): Promise<void> {
   ]);
 
   const { rows } = await query(
-    `SELECT id, from_email, to_emails, cc_emails, bcc_emails, subject, html_content, text_content, attachments
+    `SELECT id, from_email, to_emails, cc_emails, bcc_emails, subject, html_content, text_content, attachments, headers
      FROM email_logs
      WHERE batch_id = $1 AND status = 'pending'
      ORDER BY created_at ASC`,
@@ -111,6 +112,7 @@ export async function processBatch(batchId: string): Promise<void> {
         html: row.html_content ?? undefined,
         text: row.text_content ?? undefined,
         attachments: row.attachments?.length ? row.attachments : undefined,
+        headers: row.headers ?? undefined,
       });
       await query(
         `UPDATE email_logs SET status = 'sent', ses_message_id = $1 WHERE id = $2`,

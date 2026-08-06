@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS email_logs (
   html_content TEXT,
   text_content TEXT,
   attachments JSONB DEFAULT '[]',
+  headers JSONB, -- Custom email headers (e.g. List-Unsubscribe), passed straight through to SES
   status VARCHAR(50) DEFAULT 'pending', -- pending, sent, failed, delivered, bounced, complained
   ses_message_id VARCHAR(255),
   error_message TEXT,
@@ -98,6 +99,7 @@ CREATE TABLE IF NOT EXISTS email_logs (
 --   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 -- );
 -- ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS batch_id UUID REFERENCES batches(id) ON DELETE SET NULL;
+-- ALTER TABLE email_logs ADD COLUMN IF NOT EXISTS headers JSONB;
 -- CREATE TRIGGER update_batches_updated_at BEFORE UPDATE ON batches
 --     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 

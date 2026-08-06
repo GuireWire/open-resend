@@ -46,6 +46,7 @@ const bulkEmailSchema = z
     html: z.string().optional(),
     text: z.string().optional(),
     attachments: z.array(attachmentSchema).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
   })
   .refine((data) => data.html || data.text, {
     message: "Either html or text content is required",
@@ -150,8 +151,8 @@ export async function POST(request: NextRequest) {
         await client.query(
           `INSERT INTO email_logs (
             api_key_id, domain_id, batch_id, from_email, to_emails, cc_emails, bcc_emails,
-            subject, html_content, text_content, attachments, status
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending')`,
+            subject, html_content, text_content, attachments, headers, status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending')`,
           [
             apiKey.id,
             domain.id,
@@ -164,6 +165,7 @@ export async function POST(request: NextRequest) {
             email.html,
             email.text,
             JSON.stringify(email.attachments || []),
+            email.headers ? JSON.stringify(email.headers) : null,
           ]
         );
       }

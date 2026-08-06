@@ -36,6 +36,11 @@ export interface SendEmailOptions {
   attachments?: EmailAttachment[];
   replyTo?: string[];
   tags?: Record<string, string>;
+  // Custom email headers (e.g. List-Unsubscribe/List-Unsubscribe-Post for
+  // RFC 8058 one-click unsubscribe). SES's plain SendEmailCommand has no
+  // field for arbitrary headers — only SendRawEmailCommand's raw MIME does,
+  // so any headers here force that path, same as attachments already do.
+  headers?: Record<string, string>;
 }
 
 export interface SESVerificationResult {
@@ -46,8 +51,12 @@ export interface SESVerificationResult {
 export async function sendEmail(options: SendEmailOptions): Promise<string> {
   const { from, to, cc, bcc, subject, html, text, replyTo, tags } = options;
 
-  if (options.attachments && options.attachments.length > 0) {
-    // Use raw email for attachments
+  if (
+    (options.attachments && options.attachments.length > 0) ||
+    (options.headers && Object.keys(options.headers).length > 0)
+  ) {
+    // Use raw email for attachments or custom headers — SendEmailCommand
+    // supports neither.
     return sendRawEmail(options);
   }
 
@@ -88,6 +97,72 @@ export async function sendEmail(options: SendEmailOptions): Promise<string> {
   return response.MessageId!;
 }
 
+// RFC 5322 header values must be 7-bit ASCII with no bare CR/LF. Two
+// separate concerns folded into one helper since both apply to every header
+// value written into the raw MIME text below: (1) non-ASCII (accents,
+// emoji, non-Latin scripts — plausible in a shop-owner-typed subject line
+// or display name) technically needs RFC 2047 encoded-word wrapping, or the
+// header is malformed even though most clients tolerate raw UTF-8 in
+// practice; (2) a bare CR/LF in a value that's just string-concatenated
+// into the message would inject arbitrary extra headers/body content.
+function encodeHeaderValue(value: string): string {
+  const sanitized = value.replace(/[\r\n]/g, "");
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x00-\x7F]*$/.test(sanitized)) return sanitized;
+  return `=?UTF-8?B?${Buffer.from(sanitized, "utf-8").toString("base64")}?=`;
+}
+
+// Encodes only the display-name portion of a `"Name" <email@domain>` (or
+// bare `email@domain`) address string — the address itself must stay
+// ASCII/punycode, only the free-text display name can contain anything.
+function encodeAddressHeader(address: string): string {
+  const match = address.match(/^(.*?)(<[^>]+>)\s*$/);
+  if (!match) return encodeHeaderValue(address);
+  const [, namePart, angleAddr] = match;
+  const name = namePart.trim().replace(/^"|"$/g, "");
+  if (!name) return angleAddr;
+  const encoded = encodeHeaderValue(name);
+  return encoded === name ? `"${name}" ${angleAddr}` : `${encoded} ${angleAddr}`;
+}
+
+// Header names a caller can never set via the generic `headers` option —
+// each already has its own dedicated, validated field (from/to/cc/bcc/
+// subject/replyTo), or is structural to the MIME message itself. Without
+// this, a caller could use `headers` as a bypass — e.g. a "Bcc" entry here
+// would silently add a recipient outside the validated to/cc/bcc fields.
+const FORBIDDEN_HEADER_NAMES = new Set(
+  [
+    "from",
+    "to",
+    "cc",
+    "bcc",
+    "subject",
+    "reply-to",
+    "mime-version",
+    "content-type",
+    "content-transfer-encoding",
+    "dkim-signature",
+  ].map((n) => n.toLowerCase()),
+);
+
+// Header NAMES were never validated (only values were CRLF-stripped/
+// encoded above) — a caller-supplied name containing ":\r\n" would splice
+// an arbitrary extra header into the raw MIME text just as effectively as
+// an unsanitized value would. `headers` is public API surface (any API key
+// holder can POST arbitrary names to /api/emails, /batch, /bulk), so this
+// has to be enforced at the one place every path funnels through, not left
+// to whatever validation a given caller happens to do upstream.
+function assertValidHeaderName(name: string): void {
+  if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) {
+    throw new Error(`Invalid header name: ${JSON.stringify(name)}`);
+  }
+  if (FORBIDDEN_HEADER_NAMES.has(name.toLowerCase())) {
+    throw new Error(
+      `Header "${name}" must be set via its dedicated field, not headers`,
+    );
+  }
+}
+
 export async function sendRawEmail(options: SendEmailOptions): Promise<string> {
   const {
     from,
@@ -108,12 +183,17 @@ export async function sendRawEmail(options: SendEmailOptions): Promise<string> {
   let rawMessage = "";
 
   // Headers
-  rawMessage += `From: ${from}\r\n`;
-  rawMessage += `To: ${to.join(", ")}\r\n`;
-  if (cc && cc.length > 0) rawMessage += `Cc: ${cc.join(", ")}\r\n`;
+  rawMessage += `From: ${encodeAddressHeader(from)}\r\n`;
+  rawMessage += `To: ${to.map(encodeAddressHeader).join(", ")}\r\n`;
+  if (cc && cc.length > 0)
+    rawMessage += `Cc: ${cc.map(encodeAddressHeader).join(", ")}\r\n`;
   if (replyTo && replyTo.length > 0)
-    rawMessage += `Reply-To: ${replyTo.join(", ")}\r\n`;
-  rawMessage += `Subject: ${subject}\r\n`;
+    rawMessage += `Reply-To: ${replyTo.map(encodeAddressHeader).join(", ")}\r\n`;
+  rawMessage += `Subject: ${encodeHeaderValue(subject)}\r\n`;
+  for (const [name, value] of Object.entries(options.headers ?? {})) {
+    assertValidHeaderName(name);
+    rawMessage += `${name}: ${encodeHeaderValue(value)}\r\n`;
+  }
   rawMessage += `MIME-Version: 1.0\r\n`;
   rawMessage += `Content-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n`;
 

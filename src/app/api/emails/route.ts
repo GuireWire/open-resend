@@ -40,6 +40,7 @@ const sendEmailSchema = z
     attachments: z.array(attachmentSchema).optional(),
     reply_to: z.preprocess(toArrayOrString, z.array(z.string())).optional(),
     tags: z.record(z.string(), z.string()).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
   })
   .refine((data) => data.html || data.text, {
     message: "Either html or text content is required",
@@ -93,6 +94,7 @@ export async function POST(request: NextRequest) {
       attachments,
       reply_to,
       tags,
+      headers,
     } = validatedData;
 
     console.log(`[/api/emails] Sending email from=${from} to=${JSON.stringify(to)} subject="${subject}" attachments=${attachments?.length ?? 0}`);
@@ -163,6 +165,7 @@ export async function POST(request: NextRequest) {
       attachments: sesAttachments,
       replyTo: replyToArray,
       tags,
+      headers,
     });
 
     // Log email in database
@@ -171,8 +174,8 @@ export async function POST(request: NextRequest) {
       const result = await query(
         `INSERT INTO email_logs (
           api_key_id, domain_id, from_email, to_emails, cc_emails, bcc_emails,
-          subject, html_content, text_content, attachments, status, ses_message_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          subject, html_content, text_content, attachments, headers, status, ses_message_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *`,
         [
           apiKey.id,
@@ -185,6 +188,7 @@ export async function POST(request: NextRequest) {
           html,
           text,
           JSON.stringify(attachments || []),
+          headers ? JSON.stringify(headers) : null,
           "sent",
           messageId,
         ]
