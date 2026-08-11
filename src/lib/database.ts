@@ -67,8 +67,30 @@ export interface Domain {
     server: string;
     port: number;
   };
+  webhook_url?: string;
+  webhook_secret?: string;
+  // Where received mail for this domain gets pushed. Shares webhook_secret
+  // with webhook_url above — one secret per domain, two destinations.
+  inbound_webhook_url?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ReceivedEmail {
+  id: string;
+  domain_id: string;
+  message_id?: string;
+  in_reply_to?: string;
+  references_header?: string;
+  from_email: string;
+  to_emails: string[];
+  subject?: string;
+  text_content?: string;
+  html_content?: string;
+  raw_s3_key?: string;
+  received_at: string;
+  webhook_delivered_at?: string;
+  webhook_delivery_status?: string;
 }
 
 export interface ApiKey {

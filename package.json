@@ -34,6 +34,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-iam": "^3.899.0",
+    "@aws-sdk/client-s3": "^3.1107.0",
     "@aws-sdk/client-ses": "^3.682.0",
     "@types/pg": "^8.15.5",
     "axios": "^1.7.9",
@@ -41,6 +42,7 @@
     "jose": "^5.9.6",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.539.0",
+    "mailparser": "^3.9.15",
     "nanoid": "^5.0.9",
     "next": "^15.3.8",
     "next-auth": "^4.24.10",
@@ -62,6 +64,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/jest": "^30.0.0",
     "@types/jsonwebtoken": "^9.0.7",
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

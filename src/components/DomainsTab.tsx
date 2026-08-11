@@ -22,6 +22,7 @@ interface Domain {
   };
   webhook_url?: string;
   webhook_secret?: string;
+  inbound_webhook_url?: string;
   created_at: string;
 }
 
@@ -38,6 +39,7 @@ export default function DomainsTab() {
   const [showWebhookModal, setShowWebhookModal] = useState<Domain | null>(null);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
+  const [inboundWebhookUrl, setInboundWebhookUrl] = useState("");
   const [savingWebhook, setSavingWebhook] = useState(false);
 
   useEffect(() => {
@@ -184,6 +186,7 @@ export default function DomainsTab() {
   const handleOpenWebhookModal = (domain: Domain) => {
     setWebhookUrl(domain.webhook_url ?? "");
     setWebhookSecret(domain.webhook_secret ?? "");
+    setInboundWebhookUrl(domain.inbound_webhook_url ?? "");
     setShowWebhookModal(domain);
   };
 
@@ -197,7 +200,12 @@ export default function DomainsTab() {
     if (!showWebhookModal) return;
     setSavingWebhook(true);
     try {
-      await api.updateDomainWebhook(showWebhookModal.id, webhookUrl, webhookSecret);
+      await api.updateDomainWebhook(
+        showWebhookModal.id,
+        webhookUrl,
+        webhookSecret,
+        inboundWebhookUrl
+      );
       await loadDomains();
       setShowWebhookModal(null);
     } catch (error: unknown) {
@@ -493,6 +501,23 @@ export default function DomainsTab() {
                   </div>
                   <p className="mt-1 text-xs text-gray-500">
                     Copy this value — you will need it as <code className="bg-gray-100 px-1 rounded">RESEND_WEBHOOK_SECRET</code> in your Coolify app instance.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Inbound Webhook URL <span className="text-gray-400">(optional)</span>
+                  </label>
+                  <input
+                    type="url"
+                    value={inboundWebhookUrl}
+                    onChange={(e) => setInboundWebhookUrl(e.target.value)}
+                    placeholder="https://yourdomain.com/api/webhooks/inbound-email"
+                    className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Where mail received at <code className="bg-gray-100 px-1 rounded">inbound.{showWebhookModal.domain}</code> gets pushed.
+                    Signed with the same secret above. Leave blank to store received mail without forwarding it.
                   </p>
                 </div>
               </div>

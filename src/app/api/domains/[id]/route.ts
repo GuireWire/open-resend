@@ -90,11 +90,14 @@ export async function PATCH(
       return cors(NextResponse.json({ error: "Domain not found" }, { status: 404 }));
     }
 
-    const { webhook_url, webhook_secret } = await request.json();
+    const { webhook_url, webhook_secret, inbound_webhook_url } = await request.json();
 
+    // inbound_webhook_url is where received mail gets pushed (see
+    // /api/webhooks/ses-inbound); it shares webhook_secret with the sending-
+    // events webhook above, so a domain still only ever holds one secret.
     await query(
-      `UPDATE domains SET webhook_url = $1, webhook_secret = $2 WHERE id = $3`,
-      [webhook_url ?? null, webhook_secret ?? null, id]
+      `UPDATE domains SET webhook_url = $1, webhook_secret = $2, inbound_webhook_url = $3 WHERE id = $4`,
+      [webhook_url ?? null, webhook_secret ?? null, inbound_webhook_url ?? null, id]
     );
 
     return cors(NextResponse.json({

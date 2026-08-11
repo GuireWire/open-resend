@@ -87,10 +87,19 @@ class ApiClient {
     });
   }
 
-  async updateDomainWebhook(id: string, webhookUrl: string, webhookSecret: string) {
+  async updateDomainWebhook(
+    id: string,
+    webhookUrl: string,
+    webhookSecret: string,
+    inboundWebhookUrl?: string
+  ) {
     return this.request(`/domains/${id}`, {
       method: "PATCH",
-      body: JSON.stringify({ webhook_url: webhookUrl, webhook_secret: webhookSecret }),
+      body: JSON.stringify({
+        webhook_url: webhookUrl,
+        webhook_secret: webhookSecret,
+        inbound_webhook_url: inboundWebhookUrl || null,
+      }),
     });
   }
 

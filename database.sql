@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS domains (
   smtp_credentials JSONB, -- Stores encrypted SMTP username/password
   webhook_url TEXT,
   webhook_secret VARCHAR(255),
+  -- Where inbound (received) email gets pushed. A separate URL from
+  -- webhook_url because the two carry different payloads to different
+  -- handlers — sending events (delivered/bounced) vs. a received message —
+  -- but they share webhook_secret, so onboarding a domain still means
+  -- distributing exactly one secret.
+  inbound_webhook_url TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -31,6 +37,7 @@ CREATE TABLE IF NOT EXISTS domains (
 -- Migration for existing installs (safe to run multiple times):
 -- ALTER TABLE domains ADD COLUMN IF NOT EXISTS webhook_url TEXT;
 -- ALTER TABLE domains ADD COLUMN IF NOT EXISTS webhook_secret VARCHAR(255);
+-- ALTER TABLE domains ADD COLUMN IF NOT EXISTS inbound_webhook_url TEXT;
 
 -- API Keys table
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -113,6 +120,28 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Received (inbound) emails table. Populated by /api/webhooks/ses-inbound
+-- from the SNS notification SES raises when mail lands on a domain's
+-- inbound.<domain> MX. Deliberately separate from email_logs: that table is
+-- shaped around a send we initiated (api_key_id, ses_message_id, delivery
+-- status), none of which has a meaning for mail arriving from outside.
+CREATE TABLE IF NOT EXISTS received_emails (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  domain_id UUID REFERENCES domains(id) ON DELETE CASCADE,
+  message_id TEXT,         -- Message-ID header of the email we just received
+  in_reply_to TEXT,        -- what it is replying to; correlates upstream
+  references_header TEXT,  -- full References chain, raw and unparsed
+  from_email TEXT NOT NULL,
+  to_emails JSONB NOT NULL,
+  subject TEXT,
+  text_content TEXT,
+  html_content TEXT,
+  raw_s3_key TEXT,         -- full raw MIME in S3, for debugging + future attachment support
+  received_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  webhook_delivered_at TIMESTAMP WITH TIME ZONE,
+  webhook_delivery_status TEXT
+);
+
 -- Waitlist signups table
 CREATE TABLE IF NOT EXISTS waitlist_signups (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -143,6 +172,10 @@ CREATE INDEX IF NOT EXISTS idx_email_logs_batch_id ON email_logs(batch_id);
 CREATE INDEX IF NOT EXISTS idx_batches_api_key_id ON batches(api_key_id);
 CREATE INDEX IF NOT EXISTS idx_batches_domain_id ON batches(domain_id);
 CREATE INDEX IF NOT EXISTS idx_webhook_events_email_log_id ON webhook_events(email_log_id);
+CREATE INDEX IF NOT EXISTS idx_received_emails_domain_id ON received_emails(domain_id);
+CREATE INDEX IF NOT EXISTS idx_received_emails_message_id ON received_emails(message_id);
+CREATE INDEX IF NOT EXISTS idx_received_emails_in_reply_to ON received_emails(in_reply_to);
+CREATE INDEX IF NOT EXISTS idx_received_emails_received_at ON received_emails(received_at);
 CREATE INDEX IF NOT EXISTS idx_webhook_events_processed ON webhook_events(processed);
 CREATE INDEX IF NOT EXISTS idx_waitlist_signups_email ON waitlist_signups(email);
 CREATE INDEX IF NOT EXISTS idx_waitlist_signups_created_at ON waitlist_signups(created_at);
