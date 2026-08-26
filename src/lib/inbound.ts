@@ -27,6 +27,7 @@ export interface SESInboundNotification {
     commonHeaders?: {
       from?: string[];
       to?: string[];
+      cc?: string[];
       messageId?: string;
       subject?: string;
     };
@@ -47,6 +48,7 @@ export interface ParsedInboundEmail {
   references: string | null;
   from: string;
   to: string[];
+  cc: string[];
   subject: string | null;
   text: string | null;
   html: string | null;
@@ -72,11 +74,21 @@ export async function fetchAndParseRawEmail(
   const raw = await response.Body!.transformToByteArray();
   const parsed = await simpleParser(Buffer.from(raw));
 
-  // mailparser normalises addresses into objects; `to` can also be an array
-  // when a message has multiple To headers.
+  // mailparser normalises addresses into objects; `to`/`cc` can also be an
+  // array when a message has multiple To/Cc headers. Cc matters here because
+  // a customer's reply can carry the plus-addressed reply-to token in Cc
+  // rather than To (e.g. a forwarding-alias setup where their client's
+  // "reply" doesn't treat the alias as a normal reply target) — see
+  // bookings-icon-studios' findThreadRoot, which checks both.
   const toField = parsed.to;
   const toEntries = Array.isArray(toField) ? toField : toField ? [toField] : [];
   const to = toEntries.flatMap((entry) =>
+    entry.value.map((addr) => addr.address ?? "").filter(Boolean),
+  );
+
+  const ccField = parsed.cc;
+  const ccEntries = Array.isArray(ccField) ? ccField : ccField ? [ccField] : [];
+  const cc = ccEntries.flatMap((entry) =>
     entry.value.map((addr) => addr.address ?? "").filter(Boolean),
   );
 
@@ -92,6 +104,7 @@ export async function fetchAndParseRawEmail(
     references,
     from: parsed.from?.value[0]?.address || "",
     to,
+    cc,
     subject: parsed.subject || null,
     text: parsed.text || null,
     html: typeof parsed.html === "string" ? parsed.html : null,
@@ -157,6 +170,7 @@ export async function forwardReceivedEmail(
       references: parsed.references,
       from: parsed.from,
       to: parsed.to,
+      cc: parsed.cc,
       subject: parsed.subject,
       text: parsed.text,
       html: parsed.html,

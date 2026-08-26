@@ -103,6 +103,7 @@ async function processInboundEmail(notification: SESInboundNotification) {
       references: null,
       from: notification.mail.source,
       to: recipients,
+      cc: notification.mail.commonHeaders?.cc ?? [],
       subject: notification.mail.commonHeaders?.subject ?? null,
       text: null,
       html: null,
